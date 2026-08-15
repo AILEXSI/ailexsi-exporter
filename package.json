@@ -1,7 +1,7 @@
 {
   "name": "@ailexsi/exporter",
-  "version": "1.2.0",
-  "description": "AILEXSI Exporter — local-first timeline to H.264/AAC MP4. Standalone plugin.",
+  "version": "1.2.1",
+  "description": "AILEXSI Exporter — local-first multi-track timeline to H.264/AAC MP4. WebCodecs + Mediabunny in browser, system FFmpeg on desktop.",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
@@ -11,7 +11,13 @@
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
-  "keywords": ["ailexsi", "exporter", "mp4", "webcodecs", "ffmpeg", "local-first"],
+  "keywords": [
+    "ailexsi",
+    "exporter",
+    "mp4",
+    "webcodecs",
+    "local-first"
+  ],
   "author": "AILEXSI",
   "license": "UNLICENSED",
   "private": true,
