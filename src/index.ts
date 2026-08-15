@@ -13,7 +13,7 @@ import type { ExportHooks, ExportJob, ExportResult } from "./types";
 export type { ProgressCallback } from "./types";
 export * from "./types";
 export { planTimeline } from "./planner";
-export { canUseWebCodecs, probeH264 } from "./backends/webcodecs";
+export { canUseWebCodecs, probeH264, probeAac } from "./backends/webcodecs";
 export { jobFromProject } from "./from-project";
 export { sanitizeFileName, isPlayableSource, safePath } from "./media";
 export { isValidMp4, evenDim, parseBitrate } from "./mp4";

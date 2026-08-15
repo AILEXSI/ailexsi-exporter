@@ -4,6 +4,8 @@ import {
   CanvasSource,
   Mp4OutputFormat,
   Output,
+  QUALITY_MEDIUM,
+  canEncodeAudio,
   canEncodeVideo,
 } from "mediabunny";
 import { clearMediaCache, decodeAudio, isPlayableSource, loadVideo, seekVideo } from "../media";
@@ -12,6 +14,13 @@ import { clipAtTime, planTimeline, type RenderPlan } from "../planner";
 import type { ExportClip, ExportHooks, ExportJob, ExportResult } from "../types";
 
 let encoderProbe: boolean | null = null;
+
+export type AacConfig = {
+  sampleRate: number;
+  channels: number;
+  bitrate?: number;
+  useQuality?: boolean;
+};
 
 export function canUseWebCodecs(): boolean {
   return (
@@ -29,6 +38,31 @@ export async function probeH264(): Promise<boolean> {
     encoderProbe = canUseWebCodecs();
   }
   return encoderProbe;
+}
+
+export async function probeAac(): Promise<AacConfig | null> {
+  const candidates: AacConfig[] = [
+    { sampleRate: 44100, channels: 2, useQuality: true },
+    { sampleRate: 48000, channels: 2, useQuality: true },
+    { sampleRate: 44100, channels: 2, bitrate: 128_000 },
+    { sampleRate: 48000, channels: 2, bitrate: 128_000 },
+    { sampleRate: 48000, channels: 2, bitrate: 192_000 },
+    { sampleRate: 44100, channels: 1, bitrate: 96_000 },
+    { sampleRate: 22050, channels: 1, bitrate: 64_000 },
+  ];
+  for (const c of candidates) {
+    try {
+      const ok = await canEncodeAudio("aac", {
+        numberOfChannels: c.channels,
+        sampleRate: c.sampleRate,
+        ...(c.useQuality ? { quality: QUALITY_MEDIUM } : { bitrate: c.bitrate }),
+      });
+      if (ok) return c;
+    } catch {
+      /* try next */
+    }
+  }
+  return null;
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -50,6 +84,23 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 export async function exportWithWebCodecs(
   job: ExportJob,
   hooks: ExportHooks = {},
+): Promise<ExportResult> {
+  try {
+    return await renderMp4(job, hooks, job.options.includeAudio !== false);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/aac|mp4a|audio|encoder configuration/i.test(msg) && job.options.includeAudio !== false) {
+      hooks.onProgress?.({ percent: 8, stage: "Retrying without audio" });
+      return await renderMp4(job, hooks, false);
+    }
+    throw e;
+  }
+}
+
+async function renderMp4(
+  job: ExportJob,
+  hooks: ExportHooks,
+  wantAudio: boolean,
 ): Promise<ExportResult> {
   const { onProgress, signal } = hooks;
   const plan = planTimeline(job);
@@ -85,16 +136,19 @@ export async function exportWithWebCodecs(
   });
   output.addVideoTrack(videoSource, { frameRate: plan.fps });
 
+  const aac = wantAudio && plan.includeAudio ? await probeAac() : null;
   let mixedAudio: AudioBuffer | null = null;
-  if (plan.includeAudio) {
+  if (aac) {
     onProgress?.({ percent: 10, stage: "Mixing audio" });
-    mixedAudio = await mixAudio(plan, signal);
+    mixedAudio = await mixAudio(plan, aac, signal);
   }
 
-  if (mixedAudio) {
+  if (mixedAudio && aac) {
     const audioSource = new AudioBufferSource({
       codec: "aac",
-      bitrate: parseBitrate(job.options.audioBitrate, 192_000),
+      ...(aac.useQuality
+        ? { quality: QUALITY_MEDIUM }
+        : { bitrate: aac.bitrate ?? parseBitrate(job.options.audioBitrate, 128_000) }),
     });
     output.addAudioTrack(audioSource);
     await output.start();
@@ -231,11 +285,13 @@ async function paintFrame(
 
 async function mixAudio(
   plan: RenderPlan,
+  aac: AacConfig,
   signal?: AbortSignal,
 ): Promise<AudioBuffer | null> {
-  const sampleRate = 48_000;
+  const sampleRate = aac.sampleRate;
+  const channels = aac.channels;
   const length = Math.max(1, Math.ceil((plan.durationMs / 1000) * sampleRate));
-  const ctx = new OfflineAudioContext(2, length, sampleRate);
+  const ctx = new OfflineAudioContext(channels, length, sampleRate);
 
   const dedicated = plan.audioTracks.flatMap((t) => t.clips);
   const clips: ExportClip[] =

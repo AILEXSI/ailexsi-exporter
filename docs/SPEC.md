@@ -21,7 +21,7 @@ IN/OUT ranges are applied in `jobFromProject` by shifting `startMs` and advancin
 ## Browser (webcodecs)
 
 1. Probe `canEncodeVideo("avc")`.
-2. Mix audio (AUDIO clips, else VIDEO sources) via `OfflineAudioContext` @ 48 kHz stereo → AAC.
+2. Probe AAC (`canEncodeAudio`) across quality/bitrate/rate/channel candidates. Mix AUDIO clips, else VIDEO sources, at the probed rate. If no AAC encoder exists, export video-only MP4 (still `ftyp` + H.264). Retry once without audio if the encoder throws.
 3. Composite each frame onto a canvas (letterbox, `#050608`).
 4. Sequential seek on the same clip; hard seek on cut.
 5. Yield to the event loop every 4 frames so the UI can paint progress.
