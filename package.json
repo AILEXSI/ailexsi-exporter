@@ -1,0 +1,22 @@
+{
+  "name": "@ailexsi/exporter",
+  "version": "0.1.0-blueprint",
+  "description": "AILEXSI Exporter — timeline to MP4 rendering blueprint. Local-first.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": ["ailexsi", "exporter", "mp4", "ffmpeg", "local-first"],
+  "author": "AILEXSI",
+  "license": "UNLICENSED",
+  "private": true,
+  "devDependencies": {
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
