@@ -1,3 +1,4 @@
+/** Contract re-export — matches the frozen ExportJob blueprint. */
 export type {
   ExportClip,
   ExportHooks,
