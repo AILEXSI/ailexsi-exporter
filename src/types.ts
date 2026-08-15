@@ -1,6 +1,6 @@
 /**
- * AILEXSI Exporter — Types
- * Version: 1.1.0
+ * AILEXSI Exporter — frozen job contract.
+ * Version: 1.2.0
  */
 
 export interface RenderOptions {

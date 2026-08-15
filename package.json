@@ -1,6 +1,6 @@
 {
   "name": "@ailexsi/exporter",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "AILEXSI Exporter — local-first timeline to H.264/AAC MP4. Standalone plugin.",
   "type": "module",
   "main": "src/index.ts",
@@ -11,7 +11,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit"
   },
-  "keywords": ["ailexsi", "exporter", "mp4", "webcodecs", "local-first"],
+  "keywords": ["ailexsi", "exporter", "mp4", "webcodecs", "ffmpeg", "local-first"],
   "author": "AILEXSI",
   "license": "UNLICENSED",
   "private": true,

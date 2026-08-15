@@ -6,8 +6,9 @@ import {
   Output,
   canEncodeVideo,
 } from "mediabunny";
-import { decodeAudio, isPlayableSource, loadVideo, seekVideo } from "../media";
-import { planTimeline, type RenderPlan } from "../planner";
+import { clearMediaCache, decodeAudio, isPlayableSource, loadVideo, seekVideo } from "../media";
+import { isValidMp4, parseBitrate } from "../mp4";
+import { clipAtTime, planTimeline, type RenderPlan } from "../planner";
 import type { ExportClip, ExportHooks, ExportJob, ExportResult } from "../types";
 
 let encoderProbe: boolean | null = null;
@@ -34,8 +35,14 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise((resolve, reject) => {
     const t = setTimeout(() => reject(new Error(`${label} timeout (${ms}ms)`)), ms);
     p.then(
-      (v) => { clearTimeout(t); resolve(v); },
-      (e) => { clearTimeout(t); reject(e); },
+      (v) => {
+        clearTimeout(t);
+        resolve(v);
+      },
+      (e) => {
+        clearTimeout(t);
+        reject(e);
+      },
     );
   });
 }
@@ -49,21 +56,27 @@ export async function exportWithWebCodecs(
   const throwIfAborted = () => {
     if (signal?.aborted) throw new Error("Export cancelled");
   };
+
   onProgress?.({ percent: 2, stage: "Planning timeline" });
   if (plan.durationMs < 80) return fail(job, "Timeline too short to export");
+
   const ok = await probeH264();
   if (!ok) return fail(job, "H.264 encoder not available in this browser");
+
   onProgress?.({ percent: 6, stage: "Preparing H.264 encoder" });
+
   const canvas = document.createElement("canvas");
   canvas.width = plan.width;
   canvas.height = plan.height;
   const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
   if (!ctx) return fail(job, "Canvas 2D not available");
+
   const target = new BufferTarget();
   const output = new Output({
     format: new Mp4OutputFormat({ fastStart: "in-memory" }),
     target,
   });
+
   const videoSource = new CanvasSource(canvas, {
     codec: "avc",
     bitrate: parseBitrate(job.options.videoBitrate, 8_000_000),
@@ -71,11 +84,13 @@ export async function exportWithWebCodecs(
     sizeChangeBehavior: "contain",
   });
   output.addVideoTrack(videoSource, { frameRate: plan.fps });
+
   let mixedAudio: AudioBuffer | null = null;
-  if (plan.includeAudio && plan.audioTracks.some((t) => t.clips.length)) {
+  if (plan.includeAudio) {
     onProgress?.({ percent: 10, stage: "Mixing audio" });
-    mixedAudio = await mixAudio(job, plan.durationMs, signal);
+    mixedAudio = await mixAudio(plan, signal);
   }
+
   if (mixedAudio) {
     const audioSource = new AudioBufferSource({
       codec: "aac",
@@ -87,55 +102,115 @@ export async function exportWithWebCodecs(
   } else {
     await output.start();
   }
+
   const frameDur = 1 / plan.fps;
   const total = plan.frameCount;
   const budget = Math.max(25_000, plan.durationMs * 5 + 15_000);
+
   try {
-    await withTimeout(encodeFrames({ job, plan, ctx, canvas, videoSource, frameDur, total, onProgress, throwIfAborted }), budget, "H.264 encode");
-    onProgress?.({ percent: 96, stage: "Muxing MP4" });
+    await withTimeout(
+      encodeFrames({
+        plan,
+        ctx,
+        canvas,
+        videoSource,
+        frameDur,
+        total,
+        onProgress,
+        throwIfAborted,
+      }),
+      budget,
+      "H.264 encode",
+    );
+
+    onProgress?.({ percent: 94, stage: "Muxing MP4" });
     await withTimeout(output.finalize(), 12_000, "MP4 mux");
   } catch (e) {
-    try { await withTimeout(output.finalize(), 2_000, "mux abort"); } catch { /* */ }
+    try {
+      await withTimeout(output.finalize(), 2_000, "mux abort");
+    } catch {
+      /* */
+    }
+    clearMediaCache();
     if (signal?.aborted) return fail(job, "Export cancelled");
     throw e;
   }
+
+  clearMediaCache();
+
   const buffer = target.buffer;
-  if (!buffer || buffer.byteLength < 800) return fail(job, "Encoder produced an empty file");
+  if (!buffer || buffer.byteLength < 800) {
+    return fail(job, "Encoder produced an empty file");
+  }
+  if (!isValidMp4(buffer)) {
+    return fail(job, "Encoder did not produce a valid MP4 (ftyp missing)");
+  }
+
   const blob = new Blob([buffer], { type: "video/mp4" });
   onProgress?.({ percent: 100, stage: "Done" });
-  return { outputPath: job.options.outputPath || "export.mp4", durationMs: plan.durationMs, fileSizeBytes: blob.size, success: true, blob, backend: "webcodecs" };
+
+  return {
+    outputPath: job.options.outputPath || "export.mp4",
+    durationMs: plan.durationMs,
+    fileSizeBytes: blob.size,
+    success: true,
+    blob,
+    backend: "webcodecs",
+  };
 }
 
-async function encodeFrames(args: any) {
-  const { job, plan, ctx, canvas, videoSource, frameDur, total, onProgress, throwIfAborted } = args;
-  let lastClipId = null;
-  let lastEl = null;
+async function encodeFrames(args: {
+  plan: RenderPlan;
+  ctx: CanvasRenderingContext2D;
+  canvas: HTMLCanvasElement;
+  videoSource: CanvasSource;
+  frameDur: number;
+  total: number;
+  onProgress?: ExportHooks["onProgress"];
+  throwIfAborted: () => void;
+}) {
+  const { plan, ctx, canvas, videoSource, frameDur, total, onProgress, throwIfAborted } = args;
+  let lastClipId: string | null = null;
+  let lastEl: HTMLVideoElement | null = null;
+
   for (let i = 0; i < total; i++) {
     throwIfAborted();
     const tMs = (i / plan.fps) * 1000;
-    const clip = clipAtTime(job, tMs);
+    const clip = clipAtTime(plan.videoTracks, tMs);
+
     lastEl = await paintFrame(ctx, canvas, clip, tMs, lastClipId, lastEl);
     lastClipId = clip?.id ?? null;
     await videoSource.add(i * frameDur, frameDur);
-    if (i % 8 === 0 || i === total - 1) {
-      onProgress?.({ percent: Math.min(94, 12 + Math.round((i / Math.max(1, total)) * 82)), stage: "Encoding H.264", currentTimeMs: tMs });
+
+    if (i % 4 === 0) await yieldTick();
+
+    if (i % 6 === 0 || i === total - 1) {
+      const pct = 14 + Math.round((i / Math.max(1, total)) * 78);
+      onProgress?.({
+        percent: Math.min(92, pct),
+        stage: "Encoding H.264",
+        currentTimeMs: tMs,
+      });
     }
   }
 }
 
-function clipAtTime(job, tMs) {
-  const videos = job.timeline.tracks.filter((t) => t.kind === "VIDEO");
-  for (let i = videos.length - 1; i >= 0; i--) {
-    const found = videos[i].clips.find((c) => tMs >= c.startMs && tMs < c.endMs);
-    if (found) return found;
-  }
-  return null;
+function yieldTick(): Promise<void> {
+  return new Promise((r) => setTimeout(r, 0));
 }
 
-async function paintFrame(ctx, canvas, clip, tMs, lastClipId, lastEl) {
+async function paintFrame(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  clip: ExportClip | null,
+  tMs: number,
+  lastClipId: string | null,
+  lastEl: HTMLVideoElement | null,
+): Promise<HTMLVideoElement | null> {
   ctx.fillStyle = "#050608";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   if (!clip || !isPlayableSource(clip.sourcePath)) return lastEl;
+
   try {
     const el = lastClipId === clip.id && lastEl ? lastEl : await loadVideo(clip.sourcePath);
     const srcIn = clip.sourceInMs ?? 0;
@@ -145,44 +220,56 @@ async function paintFrame(ctx, canvas, clip, tMs, lastClipId, lastEl) {
     else if (Math.abs(el.currentTime - targetSec) > 1 / 90) el.currentTime = targetSec;
     if (el.videoWidth < 2) return el;
     const scale = Math.min(canvas.width / el.videoWidth, canvas.height / el.videoHeight);
-    ctx.drawImage(el, (canvas.width - el.videoWidth * scale) / 2, (canvas.height - el.videoHeight * scale) / 2, el.videoWidth * scale, el.videoHeight * scale);
+    const w = el.videoWidth * scale;
+    const h = el.videoHeight * scale;
+    ctx.drawImage(el, (canvas.width - w) / 2, (canvas.height - h) / 2, w, h);
     return el;
-  } catch { return lastEl; }
+  } catch {
+    return lastEl;
+  }
 }
 
-async function mixAudio(job, durationMs, signal) {
-  const sampleRate = 48000;
-  const length = Math.max(1, Math.ceil((durationMs / 1000) * sampleRate));
+async function mixAudio(
+  plan: RenderPlan,
+  signal?: AbortSignal,
+): Promise<AudioBuffer | null> {
+  const sampleRate = 48_000;
+  const length = Math.max(1, Math.ceil((plan.durationMs / 1000) * sampleRate));
   const ctx = new OfflineAudioContext(2, length, sampleRate);
+
+  const dedicated = plan.audioTracks.flatMap((t) => t.clips);
+  const clips: ExportClip[] =
+    dedicated.length > 0 ? dedicated : plan.videoTracks.flatMap((t) => t.clips);
+
   let added = 0;
-  for (const track of job.timeline.tracks.filter((t) => t.kind === "AUDIO")) {
-    for (const clip of track.clips) {
-      if (signal?.aborted) throw new Error("Export cancelled");
-      if (!isPlayableSource(clip.sourcePath)) continue;
-      try {
-        const decoded = await decodeAudio(clip.sourcePath);
-        const src = ctx.createBufferSource();
-        src.buffer = decoded;
-        src.connect(ctx.destination);
-        src.start(Math.max(0, clip.startMs / 1000), (clip.sourceInMs ?? 0) / 1000, Math.max(0.01, (clip.endMs - clip.startMs) / 1000));
-        added++;
-      } catch { /* */ }
+  for (const clip of clips) {
+    if (signal?.aborted) throw new Error("Export cancelled");
+    if (!isPlayableSource(clip.sourcePath)) continue;
+    try {
+      const decoded = await decodeAudio(clip.sourcePath);
+      const src = ctx.createBufferSource();
+      src.buffer = decoded;
+      src.connect(ctx.destination);
+      const offset = Math.max(0, clip.startMs / 1000);
+      const srcIn = (clip.sourceInMs ?? 0) / 1000;
+      const playDur = Math.max(0.01, (clip.endMs - clip.startMs) / 1000);
+      src.start(offset, srcIn, playDur);
+      added++;
+    } catch {
+      /* skip broken / silent sources */
     }
   }
-  return added ? ctx.startRendering() : null;
+  if (!added) return null;
+  return ctx.startRendering();
 }
 
-function parseBitrate(raw, fallback) {
-  if (!raw) return fallback;
-  const m = String(raw).trim().match(/^(\d+(?:\.\d+)?)([kKmM])?$/);
-  if (!m) return fallback;
-  const n = Number(m[1]);
-  const u = (m[2] || "").toLowerCase();
-  if (u === "k") return Math.round(n * 1000);
-  if (u === "m") return Math.round(n * 1000000);
-  return Math.round(n);
-}
-
-function fail(job, error) {
-  return { outputPath: job.options.outputPath, durationMs: job.timeline.durationMs, fileSizeBytes: 0, success: false, error, backend: "webcodecs" };
+function fail(job: ExportJob, error: string): ExportResult {
+  return {
+    outputPath: job.options.outputPath,
+    durationMs: job.timeline.durationMs,
+    fileSizeBytes: 0,
+    success: false,
+    error,
+    backend: "webcodecs",
+  };
 }
