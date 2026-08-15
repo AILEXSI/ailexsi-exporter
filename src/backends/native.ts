@@ -1,6 +1,6 @@
 import type { ExportHooks, ExportJob, ExportResult } from "../types";
 
-/** Reserved for the Rust / Tauri sidecar. Browser uses webcodecs; desktop uses ffmpeg. */
+/** Reserved for the future Rust / Tauri sidecar path. */
 export async function exportWithNative(
   job: ExportJob,
   _hooks: ExportHooks = {},
