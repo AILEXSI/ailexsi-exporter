@@ -1,4 +1,3 @@
-import { clampFps, evenDim } from "./mp4";
 import type { ExportClip, ExportJob, ExportTrack } from "./types";
 
 export interface PlannedSegment {
@@ -24,9 +23,7 @@ export interface RenderPlan {
 export function planTimeline(job: ExportJob): RenderPlan {
   const { timeline, options } = job;
   const durationMs = Math.max(0, timeline.durationMs);
-  const fps = clampFps(options.fps || 30);
-  const width = evenDim(options.width || 1280, 16, 3840);
-  const height = evenDim(options.height || 720, 16, 2160);
+  const fps = Math.max(1, Math.min(60, options.fps || 30));
   const frameCount = Math.max(1, Math.round((durationMs / 1000) * fps));
 
   const videoTracks = timeline.tracks.filter((t) => t.kind === "VIDEO");
@@ -62,10 +59,9 @@ export function planTimeline(job: ExportJob): RenderPlan {
   for (const t of timeline.tracks) {
     for (const c of t.clips) {
       if (!c.sourcePath || c.sourcePath.startsWith("missing:")) {
-        const key = c.sourcePath || `(clip ${c.id})`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          missingSources.push(key);
+        if (!seen.has(c.sourcePath)) {
+          seen.add(c.sourcePath);
+          missingSources.push(c.sourcePath || `(clip ${c.id})`);
         }
       }
     }
@@ -74,8 +70,8 @@ export function planTimeline(job: ExportJob): RenderPlan {
   return {
     durationMs,
     fps,
-    width,
-    height,
+    width: options.width,
+    height: options.height,
     frameCount,
     includeAudio: options.includeAudio !== false,
     segments,
@@ -85,16 +81,14 @@ export function planTimeline(job: ExportJob): RenderPlan {
   };
 }
 
-export function clipAtTime(tracks: ExportTrack[], timeMs: number): ExportClip | null {
-  return topClipAt(tracks, timeMs);
-}
-
 function clamp(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
 function clipAt(track: ExportTrack, timeMs: number): ExportClip | null {
-  return track.clips.find((c) => timeMs >= c.startMs && timeMs < c.endMs) ?? null;
+  return (
+    track.clips.find((c) => timeMs >= c.startMs && timeMs < c.endMs) ?? null
+  );
 }
 
 function topClipAt(tracks: ExportTrack[], timeMs: number): ExportClip | null {

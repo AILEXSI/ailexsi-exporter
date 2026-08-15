@@ -1,5 +1,3 @@
-import { sanitizeFileName } from "./media";
-import { evenDim, clampFps } from "./mp4";
 import type { ExportJob } from "./types";
 
 export interface StudioClip {
@@ -42,8 +40,8 @@ export function jobFromProject(
     fileName?: string;
   },
 ): ExportJob {
-  const start = Math.max(0, opts?.rangeStartMs ?? 0);
-  const end = Math.max(start + 80, opts?.rangeEndMs ?? project.durationMs);
+  const start = opts?.rangeStartMs ?? 0;
+  const end = opts?.rangeEndMs ?? project.durationMs;
   const assets = new Map(project.mediaAssets.map((a) => [a.id, a]));
 
   return {
@@ -60,15 +58,13 @@ export function jobFromProject(
             .filter((c) => c.range.endMs > start && c.range.startMs < end)
             .map((c) => {
               const asset = c.mediaAssetId ? assets.get(c.mediaAssetId) : undefined;
-              const clipStart = Math.max(start, c.range.startMs);
-              const clipEnd = Math.min(end, c.range.endMs);
-              const trimmed = clipStart - c.range.startMs;
+              const shift = start;
               return {
                 id: c.id,
-                startMs: clipStart - start,
-                endMs: clipEnd - start,
+                startMs: Math.max(0, c.range.startMs - shift),
+                endMs: Math.max(0, c.range.endMs - shift),
                 sourcePath: asset?.localPathOrUrl || "",
-                sourceInMs: (c.sourceRange?.startMs ?? 0) + trimmed,
+                sourceInMs: c.sourceRange?.startMs ?? 0,
                 sourceOutMs: c.sourceRange?.endMs,
                 label: c.label || asset?.name,
               };
@@ -76,11 +72,11 @@ export function jobFromProject(
         })),
     },
     options: {
-      width: evenDim(opts?.width ?? 1280),
-      height: evenDim(opts?.height ?? 720, 16, 2160),
-      fps: clampFps(opts?.fps ?? 30),
+      width: opts?.width ?? 1280,
+      height: opts?.height ?? 720,
+      fps: opts?.fps ?? 30,
       format: "mp4",
-      outputPath: sanitizeFileName(opts?.fileName || project.name || "resonance"),
+      outputPath: `${(opts?.fileName || project.name || "resonance").replace(/[^\w\-]+/g, "_")}.mp4`,
       includeAudio: true,
       videoBitrate: "8M",
       audioBitrate: "192k",

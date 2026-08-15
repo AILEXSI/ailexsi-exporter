@@ -1,54 +1,25 @@
-/**
- * Local-only media helpers. Rejects remote / script / data URLs.
- * Your memory belongs to you.
- */
-
 const videoCache = new Map<string, HTMLVideoElement>();
 const audioCache = new Map<string, AudioBuffer>();
 
 export function isPlayableSource(url: string | undefined): boolean {
-  if (!url || url.startsWith("missing:")) return false;
+  if (!url) return false;
+  if (url.startsWith("missing:")) return false;
   const lower = url.slice(0, 16).toLowerCase();
-  if (
-    lower.startsWith("javascript:") ||
-    lower.startsWith("data:") ||
-    lower.startsWith("vbscript:")
-  ) {
+  if (lower.startsWith("javascript:") || lower.startsWith("data:") || lower.startsWith("vbscript:")) {
     return false;
   }
-  if (url.startsWith("blob:") || url.startsWith("file:")) return true;
-  if (url.startsWith("http://") || url.startsWith("https://")) {
-    try {
-      const u = new URL(url);
-      if (typeof location !== "undefined") return u.origin === location.origin;
-      return u.protocol === "http:" || u.protocol === "https:";
-    } catch {
-      return false;
-    }
-  }
-  return false;
-}
-
-export function sanitizeFileName(name: string): string {
-  const base = (name || "resonance_export").replace(/\.(mp4|webm|mov|mkv)$/i, "");
-  const clean = base.replace(/[^\w\-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 80);
-  return `${clean || "resonance_export"}.mp4`;
-}
-
-/** Filesystem path rules for the Node/FFmpeg backend. Never passed through a shell. */
-export function safePath(p: string): boolean {
-  if (!p || p.length > 1024) return false;
-  if (p.startsWith("-")) return false;
-  if (/[\0\n\r|;`$&<>'"\\]/.test(p)) return false;
-  if (p.includes("..")) return false;
-  return true;
+  return (
+    url.startsWith("blob:") ||
+    url.startsWith("file:") ||
+    url.startsWith("http://") ||
+    url.startsWith("https://")
+  );
 }
 
 export async function loadVideo(src: string): Promise<HTMLVideoElement> {
   if (!isPlayableSource(src)) throw new Error("Blocked non-local media source");
   const cached = videoCache.get(src);
   if (cached && cached.readyState >= 2) return cached;
-
   const el = cached ?? document.createElement("video");
   el.muted = true;
   el.playsInline = true;
@@ -57,20 +28,10 @@ export async function loadVideo(src: string): Promise<HTMLVideoElement> {
   if (el.src !== src) el.src = src;
   videoCache.set(src, el);
   if (el.readyState >= 2) return el;
-
   await new Promise<void>((resolve, reject) => {
-    const timer = window.setTimeout(() => {
-      cleanup();
-      reject(new Error("Video load timeout"));
-    }, 8_000);
-    const onOk = () => {
-      cleanup();
-      resolve();
-    };
-    const onErr = () => {
-      cleanup();
-      reject(new Error("Failed to load local video"));
-    };
+    const timer = window.setTimeout(() => { cleanup(); reject(new Error("Video load timeout")); }, 8000);
+    const onOk = () => { cleanup(); resolve(); };
+    const onErr = () => { cleanup(); reject(new Error("Failed to load video")); };
     const cleanup = () => {
       window.clearTimeout(timer);
       el.removeEventListener("loadeddata", onOk);
@@ -108,7 +69,7 @@ export async function decodeAudio(src: string): Promise<AudioBuffer> {
   const res = await fetch(src);
   if (!res.ok) throw new Error("Audio fetch failed");
   const buf = await res.arrayBuffer();
-  const ctx = new OfflineAudioContext(2, 128, 48_000);
+  const ctx = new OfflineAudioContext(2, 128, 48000);
   const decoded = await ctx.decodeAudioData(buf.slice(0));
   audioCache.set(src, decoded);
   return decoded;
@@ -116,13 +77,7 @@ export async function decodeAudio(src: string): Promise<AudioBuffer> {
 
 export function clearMediaCache() {
   for (const v of videoCache.values()) {
-    try {
-      v.pause();
-      v.removeAttribute("src");
-      v.load();
-    } catch {
-      /* released */
-    }
+    try { v.pause(); v.removeAttribute("src"); v.load(); } catch { /* */ }
   }
   videoCache.clear();
   audioCache.clear();
