@@ -1,65 +1,44 @@
-/**
- * AILEXSI Exporter — Public API Skeleton
- * Version: 0.1.0-blueprint
- */
-
-import type {
-  ExportJob,
-  ExportProgress,
-  ExportResult,
-} from "./types/export";
-
-export type ProgressCallback = (progress: ExportProgress) => void;
-
-/**
- * Main entry point (skeleton).
- * Real implementation will call FFmpeg or native backend.
- */
-export async function exportTimeline(
-  job: ExportJob,
-  opts?: { onProgress?: ProgressCallback }
-): Promise<ExportResult> {
-  const { onProgress } = opts ?? {};
-
-  onProgress?.({ percent: 0, stage: "planning" });
-
-  // Validate basic job
-  if (!job.options.outputPath) {
-    return {
-      outputPath: "",
-      durationMs: 0,
-      fileSizeBytes: 0,
-      success: false,
-      error: "outputPath is required",
-    };
+import { canUseWebCodecs, exportWithWebCodecs } from "./backends/webcodecs";
+import { sanitizeFileName } from "./media";
+import { planTimeline } from "./planner";
+import type { ExportHooks, ExportJob, ExportResult } from "./types";
+export * from "./types";
+export { planTimeline } from "./planner";
+export { canUseWebCodecs, probeH264 } from "./backends/webcodecs";
+export { jobFromProject } from "./from-project";
+export { sanitizeFileName } from "./media";
+export function detectBackend(): "webcodecs" | "ffmpeg" {
+  if (typeof window !== "undefined" && canUseWebCodecs()) return "webcodecs";
+  if (typeof process !== "undefined" && process.versions?.node) return "ffmpeg";
+  return "webcodecs";
+}
+export async function exportTimeline(job: ExportJob, opts?: ExportHooks): Promise<ExportResult> {
+  if (!job?.timeline?.tracks?.length) {
+    return { outputPath: "", durationMs: 0, fileSizeBytes: 0, success: false, error: "No tracks to export" };
   }
-
-  if (job.timeline.tracks.length === 0) {
+  job.options.outputPath = sanitizeFileName(job.options.outputPath || "export");
+  try {
+    if (detectBackend() === "ffmpeg" && typeof window === "undefined") {
+      const { exportWithFfmpeg } = await import("./backends/ffmpeg");
+      return await exportWithFfmpeg(job, opts);
+    }
+    return await exportWithWebCodecs(job, opts);
+  } catch (e) {
     return {
       outputPath: job.options.outputPath,
-      durationMs: 0,
+      durationMs: job.timeline.durationMs,
       fileSizeBytes: 0,
       success: false,
-      error: "No tracks to export",
+      error: e instanceof Error ? e.message : String(e),
     };
   }
-
-  onProgress?.({ percent: 10, stage: "validating media paths" });
-
-  // Skeleton: we do not actually render yet
-  onProgress?.({ percent: 50, stage: "render (skeleton — not implemented)" });
-
-  // Simulate finish
-  onProgress?.({ percent: 100, stage: "done (skeleton)" });
-
-  return {
-    outputPath: job.options.outputPath,
-    durationMs: job.timeline.durationMs,
-    fileSizeBytes: 0,
-    success: false,
-    error:
-      "Exporter is still a blueprint skeleton. Wire FFmpeg or native backend next.",
-  };
 }
-
-export * from "./types/export";
+export async function saveMp4Blob(blob: Blob, fileName: string): Promise<void> {
+  const name = sanitizeFileName(fileName);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 8000);
+}
